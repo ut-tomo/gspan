@@ -22,9 +22,6 @@ pub struct Graph {
     edges: Vec<Edge>,
     adjacency: Vec<Vec<EdgeId>>,
 }
-/*
-gengraph
-*/
 
 impl Graph {
     pub fn new() -> Self {
