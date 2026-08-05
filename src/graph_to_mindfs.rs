@@ -11,6 +11,9 @@ use crate::graph::{EdgeId, EdgeLabel, Graph, VertexId, VertexLabel};
 pub struct DfsVertexId(pub usize);
 
 //DFS codeの1 edge
+/*
+TODO Definition 2
+*/
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Dfs5Tuple {
     pub from: DfsVertexId,
@@ -26,6 +29,9 @@ impl Dfs5Tuple {
 }
 
 //DFS tupleの列としてDFS codeを定義
+/*
+TODO(canonical-order): Dfs5Tupleをedge列の辞書順で比較
+*/
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
 pub struct DfsCode {
     edges: Vec<Dfs5Tuple>,
@@ -310,6 +316,7 @@ fn collect_extensions(
 
     // backward extensions
     // TODO: ordering
+    // rightmost vertexからrightmost path上の祖先へ戻るvalid childだけを列挙
     for &edge_id in graph.adjacency(rightmost_graph) {
         if embedding.used_edge(edge_id) {
             continue;
@@ -347,7 +354,7 @@ fn collect_extensions(
     }
 
     // forward extensions
-    // TODO: canonical orderingに従うminimum labelとrightmost pathのlabel条件を追加する。
+    // TODO: canonical orderingに従うminimum labelとrightmost pathのlabel条件を追加
     let new_dfs_vertex = DfsVertexId(code.vertex_count());
 
     for &from_dfs in rightmost_path.iter().rev() {
