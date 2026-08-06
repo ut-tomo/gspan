@@ -11,9 +11,7 @@ use crate::graph::{EdgeId, EdgeLabel, Graph, VertexId, VertexLabel};
 pub struct DfsVertexId(pub usize);
 
 //DFS codeの1 edge
-/*
-TODO Definition 2
-*/
+/// DFS上の両端IDと、両端および辺のlabelを持つ5-tuple
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Dfs5Tuple {
     pub from: DfsVertexId,
@@ -23,13 +21,14 @@ pub struct Dfs5Tuple {
     pub to_label: VertexLabel,
 }
 impl Dfs5Tuple {
+    /// DFSで新しいvertexを発見するtree edgeならforward、既発見vertexへ戻るならbackward
     pub fn is_forward(self) -> bool {
         self.from < self.to
     }
 }
-// TODO: 辞書順の実装
 impl Ord for Dfs5Tuple {
     fn cmp(&self, other: &Self) -> Ordering {
+        // gSpanのedge comparisonを位置関係とlabelの比較に分けて実装する
         let position_order = match (self.is_forward(), other.is_forward()) {
             // backward extensionの方が先
             (false, true) => Ordering::Less,    // backward < forward
@@ -38,7 +37,7 @@ impl Ord for Dfs5Tuple {
             // backward同士
             // backwardはrightmost vertexのみから出る
             // より小さいDFS vertex idに戻る
-            // まず toを比較、同じならlabel
+            // まず toを比較->from->label
             (false, false) => self
                 .to
                 .cmp(&other.to)
@@ -46,13 +45,14 @@ impl Ord for Dfs5Tuple {
 
             // forward 同士
             // rightmost vertexに近いところから伸びている方が早い
-            // 同じなら edge label -> to label の順で比較
+            // from label -> edge label -> to label の順で比較
             (true, true) => other
                 .from
                 .cmp(&self.from)
                 .then_with(|| self.to.cmp(&other.to)),
         };
 
+        // positionが同じときは3 labelを比較し、Dfs5Tuple全体として全順序にする。
         position_order.then_with(|| {
             (self.from_label, self.edge_label, self.to_label).cmp(&(
                 other.from_label,
@@ -69,9 +69,7 @@ impl PartialOrd for Dfs5Tuple {
 }
 
 //DFS tupleの列としてDFS codeを定義
-/*
-TODO(canonical-order): Dfs5Tupleをedge列の辞書順で比較
-*/
+/// graphをDFS edgeの列として表したcode。minimum codeはgraphのcanonical labelになる。
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
 pub struct DfsCode {
     edges: Vec<Dfs5Tuple>,
@@ -184,6 +182,7 @@ impl Embedding {
 //一番最初のone edge graphを選ぶ
 
 // TODO: initial candidateのgrouping
+// 1つの候補は、追加するDFS edgeと、そのedgeを生成したgraph上のembeddingを対で持つ。
 #[derive(Debug, Clone)]
 struct Extension {
     dfs_edge: Dfs5Tuple,
@@ -202,6 +201,7 @@ fn other_endpoint(graph: &Graph, edge_id: EdgeId, vertex_id: VertexId) -> Vertex
     }
 }
 
+/// forward edgeから親関係を復元し、rootからrightmost vertexまでのDFS vertex列を返す。
 fn rightmost_path(code: &DfsCode) -> Vec<DfsVertexId> {
     let mut parent = vec![None; code.vertex_count()];
 
@@ -223,6 +223,8 @@ fn rightmost_path(code: &DfsCode) -> Vec<DfsVertexId> {
     path
 }
 
+/// 全graph edgeを両方向から見た1-edge DFS codeと、その初期embeddingを列挙する。
+/// 同じ最小edgeを持つ候補は、後でembeddingだけをまとめて次の探索へ渡す。
 fn initial_candidates(graph: &Graph) -> Vec<Extension> {
     let mut candidates = Vec::new();
 
@@ -270,6 +272,7 @@ fn collect_extensions(
     embedding: &Embedding,
     rightmost_path: &[DfsVertexId],
 ) -> Vec<Extension> {
+    // Property 1のneighborhood restrictionに従い、rightmost pathからだけ1-edge growthする。
     let mut extensions = Vec::new();
 
     let rightmost_dfs = *rightmost_path
@@ -280,6 +283,7 @@ fn collect_extensions(
 
     // backward extensions
     // TODO: ordering
+    // 列挙順には依存せず、候補を集めた後でDfs5Tuple::Ordにより最小値を選択する。
     // rightmost vertexからrightmost path上の祖先へ戻るvalid childだけを列挙
     for &edge_id in graph.adjacency(rightmost_graph) {
         if embedding.used_edge(edge_id) {
@@ -314,7 +318,8 @@ fn collect_extensions(
     }
 
     // forward extensions
-    // TODO: canonical orderingに従うminimum labelとrightmost pathのlabel条件を追加
+    // TODO: canonical になり得ないextensionのpruneの追加
+    // 未発見vertexへのedgeだけを、rightmost vertexからroot方向の順に候補化する。
     let new_dfs_vertex = DfsVertexId(code.vertex_count());
 
     for &from_dfs in rightmost_path.iter().rev() {
@@ -350,6 +355,7 @@ fn collect_extensions(
     extensions
 }
 
+/// 連結graphのminimum DFS codeを返す。非連結graphはrightmost growthで表せないため拒否する。
 pub fn minimum_dfs_code(graph: &Graph) -> Result<DfsCode, MinDfsError> {
     if !is_connected(graph) {
         return Err(MinDfsError::DisconnectedGraph);
@@ -361,6 +367,7 @@ pub fn minimum_dfs_code(graph: &Graph) -> Result<DfsCode, MinDfsError> {
 
     let initial = initial_candidates(graph);
 
+    // 最初のedgeは両端label、edge labelを含むDfs5Tupleの最小値で決める。
     let minimum_edge = initial
         .iter()
         .map(|extension| extension.dfs_edge)
@@ -390,6 +397,7 @@ pub fn minimum_dfs_code(graph: &Graph) -> Result<DfsCode, MinDfsError> {
             .flat_map(|embedding| collect_extensions(graph, &code, embedding, &path))
             .collect();
 
+        // 全embeddingから得た候補を一緒に比較し、同じ最小edgeのembeddingをすべて残す。
         let minimum_edge = extensions
             .iter()
             .map(|extension| extension.dfs_edge)
@@ -413,6 +421,7 @@ pub fn minimum_dfs_code(graph: &Graph) -> Result<DfsCode, MinDfsError> {
     Ok(code)
 }
 
+/// BFSで全vertexへ到達できるか確認する。空graphは連結として扱う。
 fn is_connected(graph: &Graph) -> bool {
     if graph.vertex_count() == 0 {
         return true;
@@ -435,4 +444,169 @@ fn is_connected(graph: &Graph) -> bool {
     }
 
     visited.into_iter().all(|visited| visited)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cmp::Ordering;
+
+    use super::*;
+
+    fn dfs_edge(
+        from: usize,
+        to: usize,
+        from_label: u32,
+        edge_label: u32,
+        to_label: u32,
+    ) -> Dfs5Tuple {
+        Dfs5Tuple {
+            from: DfsVertexId(from),
+            to: DfsVertexId(to),
+            from_label: VertexLabel(from_label),
+            edge_label: EdgeLabel(edge_label),
+            to_label: VertexLabel(to_label),
+        }
+    }
+
+    fn assert_less(left: Dfs5Tuple, right: Dfs5Tuple) {
+        assert_eq!(left.cmp(&right), Ordering::Less);
+        assert_eq!(right.cmp(&left), Ordering::Greater);
+        assert_eq!(left.partial_cmp(&right), Some(Ordering::Less));
+    }
+
+    // backward candidateが存在するときは、forward candidateより先に選ばれる
+    #[test]
+    fn dfs_tuple_orders_backward_before_forward() {
+        let backward = dfs_edge(2, 0, 3, 1, 1);
+        let forward = dfs_edge(1, 3, 2, 0, 4);
+
+        assert_less(backward, forward);
+    }
+
+    // backward同士では、戻り先のDFS IDを優先し、同じならedge labelを比較する
+    #[test]
+    fn dfs_tuple_orders_backward_by_to_then_edge_label() {
+        let smaller_to = dfs_edge(3, 0, 4, 9, 1);
+        let larger_to = dfs_edge(3, 1, 4, 0, 1);
+        assert_less(smaller_to, larger_to);
+
+        let smaller_label = dfs_edge(3, 1, 4, 1, 2);
+        let larger_label = dfs_edge(3, 1, 4, 2, 2);
+        assert_less(smaller_label, larger_label);
+    }
+
+    // forward同士では、rightmost vertexに近い大きなfrom IDを先にする
+    #[test]
+    fn dfs_tuple_orders_forward_from_rightmost_to_leftmost() {
+        let from_right = dfs_edge(2, 4, 3, 9, 5);
+        let from_left = dfs_edge(1, 4, 3, 0, 5);
+
+        assert_less(from_right, from_left);
+    }
+
+    // 同じ位置からのforward edgeは、edge label、発見先labelの順に比較
+    #[test]
+    fn dfs_tuple_orders_forward_by_edge_label_then_to_label() {
+        let smaller_edge_label = dfs_edge(2, 4, 3, 1, 9);
+        let larger_edge_label = dfs_edge(2, 4, 3, 2, 0);
+        assert_less(smaller_edge_label, larger_edge_label);
+
+        let smaller_to_label = dfs_edge(2, 4, 3, 1, 4);
+        let larger_to_label = dfs_edge(2, 4, 3, 1, 5);
+        assert_less(smaller_to_label, larger_to_label);
+    }
+
+    // 初期edgeは位置が常に(0, 1)なので、3 labelの辞書順だけで向きと辺を決める
+    #[test]
+    fn dfs_tuple_orders_initial_edge_labels_lexicographically() {
+        let smaller_from_label = dfs_edge(0, 1, 1, 9, 9);
+        let larger_from_label = dfs_edge(0, 1, 2, 0, 0);
+        assert_less(smaller_from_label, larger_from_label);
+
+        let smaller_edge_label = dfs_edge(0, 1, 1, 1, 9);
+        let larger_edge_label = dfs_edge(0, 1, 1, 2, 0);
+        assert_less(smaller_edge_label, larger_edge_label);
+
+        let smaller_to_label = dfs_edge(0, 1, 1, 1, 2);
+        let larger_to_label = dfs_edge(0, 1, 1, 1, 3);
+        assert_less(smaller_to_label, larger_to_label);
+    }
+
+    // OrdとPartialOrdが同一tupleをEqualとして扱うことを固定する
+    #[test]
+    fn identical_dfs_tuples_compare_equal() {
+        let edge = dfs_edge(2, 0, 3, 1, 1);
+
+        assert_eq!(edge.cmp(&edge), Ordering::Equal);
+        assert_eq!(edge.partial_cmp(&edge), Some(Ordering::Equal));
+    }
+
+    // 1-edge graphでは、小さいvertex labelをfrom側にした向きがminimumになる
+    #[test]
+    fn minimum_code_orients_one_edge_by_labels() {
+        let mut graph = Graph::new();
+        let high = graph.add_vertex(VertexLabel(2));
+        let low = graph.add_vertex(VertexLabel(1));
+        graph.add_edge(high, low, EdgeLabel(7));
+
+        let code = minimum_dfs_code(&graph).unwrap();
+
+        assert_eq!(code.edges(), &[dfs_edge(0, 1, 1, 7, 2)]);
+    }
+
+    // pathでは全edgeの両方向候補から最小の1-edge prefixを選べることを確認する
+    #[test]
+    fn minimum_code_for_small_path_chooses_smallest_first_edge() {
+        let mut graph = Graph::new();
+        let first = graph.add_vertex(VertexLabel(2));
+        let middle = graph.add_vertex(VertexLabel(1));
+        let last = graph.add_vertex(VertexLabel(3));
+        graph.add_edge(first, middle, EdgeLabel(5));
+        graph.add_edge(middle, last, EdgeLabel(4));
+
+        let code = minimum_dfs_code(&graph).unwrap();
+
+        assert_eq!(
+            code.edges(),
+            &[dfs_edge(0, 1, 1, 4, 3), dfs_edge(0, 2, 1, 5, 2)]
+        );
+    }
+
+    // graph上のvertex IDが違っても、同型なtriangleのcanonical labelは一致する
+    #[test]
+    fn isomorphic_triangles_have_the_same_minimum_code() {
+        let mut first = Graph::new();
+        let a = first.add_vertex(VertexLabel(1));
+        let b = first.add_vertex(VertexLabel(2));
+        let c = first.add_vertex(VertexLabel(3));
+        first.add_edge(a, b, EdgeLabel(3));
+        first.add_edge(b, c, EdgeLabel(1));
+        first.add_edge(c, a, EdgeLabel(2));
+
+        let mut second = Graph::new();
+        let c2 = second.add_vertex(VertexLabel(3));
+        let a2 = second.add_vertex(VertexLabel(1));
+        let b2 = second.add_vertex(VertexLabel(2));
+        second.add_edge(c2, a2, EdgeLabel(2));
+        second.add_edge(a2, b2, EdgeLabel(3));
+        second.add_edge(b2, c2, EdgeLabel(1));
+
+        let first_code = minimum_dfs_code(&first).unwrap();
+        let second_code = minimum_dfs_code(&second).unwrap();
+
+        assert_eq!(first_code.edge_count(), 3);
+        assert_eq!(first_code, second_code);
+    }
+
+    #[test]
+    fn disconnected_graph_is_rejected() {
+        let mut graph = Graph::new();
+        graph.add_vertex(VertexLabel(1));
+        graph.add_vertex(VertexLabel(2));
+
+        assert_eq!(
+            minimum_dfs_code(&graph),
+            Err(MinDfsError::DisconnectedGraph)
+        );
+    }
 }
