@@ -27,6 +27,46 @@ impl Dfs5Tuple {
         self.from < self.to
     }
 }
+// TODO: 辞書順の実装
+impl Ord for Dfs5Tuple {
+    fn cmp(&self, other: &Self) -> Ordering {
+        let position_order = match (self.is_forward(), other.is_forward()) {
+            // backward extensionの方が先
+            (false, true) => Ordering::Less,    // backward < forward
+            (true, false) => Ordering::Greater, // forward > backward
+
+            // backward同士
+            // backwardはrightmost vertexのみから出る
+            // より小さいDFS vertex idに戻る
+            // まず toを比較、同じならlabel
+            (false, false) => self
+                .to
+                .cmp(&other.to)
+                .then_with(|| self.from.cmp(&other.from)),
+
+            // forward 同士
+            // rightmost vertexに近いところから伸びている方が早い
+            // 同じなら edge label -> to label の順で比較
+            (true, true) => other
+                .from
+                .cmp(&self.from)
+                .then_with(|| self.to.cmp(&other.to)),
+        };
+
+        position_order.then_with(|| {
+            (self.from_label, self.edge_label, self.to_label).cmp(&(
+                other.from_label,
+                other.edge_label,
+                other.to_label,
+            ))
+        })
+    }
+}
+impl PartialOrd for Dfs5Tuple {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
 
 //DFS tupleの列としてDFS codeを定義
 /*
@@ -143,84 +183,11 @@ impl Embedding {
 
 //一番最初のone edge graphを選ぶ
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-struct InitialEdgeKey {
-    from_label: VertexLabel,
-    edge_label: EdgeLabel,
-    to_label: VertexLabel,
-}
-
 // TODO: initial candidateのgrouping
-#[allow(dead_code)]
-struct InitialGroup {
-    dfs_edge: Dfs5Tuple,
-    embeddings: Vec<Embedding>,
-}
-
 #[derive(Debug, Clone)]
 struct Extension {
-    key: ExtensionKey,
     dfs_edge: Dfs5Tuple,
     embedding: Embedding,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ExtensionKey {
-    Backward {
-        to: DfsVertexId,
-        edge_label: EdgeLabel,
-    },
-    Forward {
-        from: DfsVertexId,
-        edge_label: EdgeLabel,
-        to_label: VertexLabel,
-    },
-}
-
-// TODO: 辞書順の実装
-impl Ord for ExtensionKey {
-    fn cmp(&self, other: &Self) -> Ordering {
-        use ExtensionKey::*;
-        match (self, other) {
-            (
-                Backward {
-                    to: self_to,
-                    edge_label: self_label,
-                },
-                Backward {
-                    to: other_to,
-                    edge_label: other_label,
-                },
-            ) => self_to
-                .cmp(other_to)
-                .then_with(|| self_label.cmp(other_label)),
-
-            (
-                Forward {
-                    from: self_from,
-                    edge_label: self_edge,
-                    to_label: self_to,
-                },
-                Forward {
-                    from: other_from,
-                    edge_label: other_edge,
-                    to_label: other_to,
-                },
-            ) => other_from
-                .cmp(self_from)
-                .then_with(|| self_edge.cmp(other_edge))
-                .then_with(|| self_to.cmp(other_to)),
-
-            (Backward { .. }, Forward { .. }) => Ordering::Less,
-            (Forward { .. }, Backward { .. }) => Ordering::Greater,
-        }
-    }
-}
-
-impl PartialOrd for ExtensionKey {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
 }
 
 fn other_endpoint(graph: &Graph, edge_id: EdgeId, vertex_id: VertexId) -> VertexId {
@@ -256,7 +223,7 @@ fn rightmost_path(code: &DfsCode) -> Vec<DfsVertexId> {
     path
 }
 
-fn initial_candidates(graph: &Graph) -> Vec<(InitialEdgeKey, Dfs5Tuple, Embedding)> {
+fn initial_candidates(graph: &Graph) -> Vec<Extension> {
     let mut candidates = Vec::new();
 
     for edge_index in 0..graph.edge_count() {
@@ -270,12 +237,6 @@ fn initial_candidates(graph: &Graph) -> Vec<(InitialEdgeKey, Dfs5Tuple, Embeddin
         ] {
             let from_label = graph.vertex_labels()[from.0];
             let to_label = graph.vertex_labels()[to.0];
-
-            let key = InitialEdgeKey {
-                from_label,
-                edge_label: edge.label,
-                to_label,
-            };
 
             let dfs_edge = Dfs5Tuple {
                 from: DfsVertexId(0),
@@ -293,7 +254,10 @@ fn initial_candidates(graph: &Graph) -> Vec<(InitialEdgeKey, Dfs5Tuple, Embeddin
                 used_edges,
             };
 
-            candidates.push((key, dfs_edge, embedding));
+            candidates.push(Extension {
+                dfs_edge,
+                embedding,
+            });
         }
     }
 
@@ -338,10 +302,6 @@ fn collect_extensions(
         let edge = &graph.edges()[edge_id.0];
 
         extensions.push(Extension {
-            key: ExtensionKey::Backward {
-                to: target_dfs,
-                edge_label: edge.label,
-            },
             dfs_edge: Dfs5Tuple {
                 from: rightmost_dfs,
                 to: target_dfs,
@@ -375,11 +335,6 @@ fn collect_extensions(
             let to_label = graph.vertex_labels()[to_graph.0];
 
             extensions.push(Extension {
-                key: ExtensionKey::Forward {
-                    from: from_dfs,
-                    edge_label: edge.label,
-                    to_label,
-                },
                 dfs_edge: Dfs5Tuple {
                     from: from_dfs,
                     to: new_dfs_vertex,
@@ -406,28 +361,25 @@ pub fn minimum_dfs_code(graph: &Graph) -> Result<DfsCode, MinDfsError> {
 
     let initial = initial_candidates(graph);
 
-    let minimum_key = initial
+    let minimum_edge = initial
         .iter()
-        .map(|(key, _, _)| *key)
+        .map(|extension| extension.dfs_edge)
         .min()
         .expect("graph with edges must have an initial candidate");
 
     let mut initial_iter = initial
         .into_iter()
-        .filter(|(key, _, _)| *key == minimum_key);
+        .filter(|extension| extension.dfs_edge == minimum_edge);
 
-    let (_, first_edge, first_embedding) = initial_iter
+    let first = initial_iter
         .next()
         .expect("minimum initial candidate must exist");
 
-    let mut embeddings = vec![first_embedding];
-
-    for (_, _, embedding) in initial_iter {
-        embeddings.push(embedding);
-    }
+    let mut embeddings = vec![first.embedding];
+    embeddings.extend(initial_iter.map(|extension| extension.embedding));
 
     let mut code = DfsCode::new();
-    code.push(first_edge);
+    code.push(minimum_edge);
 
     // 同じminimum prefixを生成するembeddingをすべて残しながら1 edgeずつ拡張する。
     while code.edge_count() < graph.edge_count() {
@@ -438,21 +390,21 @@ pub fn minimum_dfs_code(graph: &Graph) -> Result<DfsCode, MinDfsError> {
             .flat_map(|embedding| collect_extensions(graph, &code, embedding, &path))
             .collect();
 
-        let minimum_key = extensions
+        let minimum_edge = extensions
             .iter()
-            .map(|extension| extension.key)
+            .map(|extension| extension.dfs_edge)
             .min()
             .expect("connected graph with unused edges must have an extension");
 
         let mut minimum_extensions = extensions
             .into_iter()
-            .filter(|extension| extension.key == minimum_key);
+            .filter(|extension| extension.dfs_edge == minimum_edge);
 
         let first = minimum_extensions
             .next()
             .expect("minimum extension must exist");
 
-        code.push(first.dfs_edge);
+        code.push(minimum_edge);
 
         embeddings = vec![first.embedding];
         embeddings.extend(minimum_extensions.map(|extension| extension.embedding));
