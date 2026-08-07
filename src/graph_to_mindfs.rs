@@ -135,9 +135,9 @@ extensionを作る際のhelper funcとして使用済みvertex, edgeも保存す
 このembeddingを複数保持し、各embeddingに対してrightmost pathからの1 edge growthを探索する形
 */
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct Embedding {
-    dfs_to_graph: Vec<VertexId>,
-    used_edges: Vec<bool>,
+pub(crate) struct Embedding {
+    pub(crate) dfs_to_graph: Vec<VertexId>,
+    pub(crate) used_edges: Vec<bool>,
 }
 
 impl Embedding {
@@ -181,12 +181,11 @@ impl Embedding {
 
 //一番最初のone edge graphを選ぶ
 
-// TODO: initial candidateのgrouping
 // 1つの候補は、追加するDFS edgeと、そのedgeを生成したgraph上のembeddingを対で持つ。
 #[derive(Debug, Clone)]
-struct Extension {
-    dfs_edge: Dfs5Tuple,
-    embedding: Embedding,
+pub(crate) struct Extension {
+    pub(crate) dfs_edge: Dfs5Tuple,
+    pub(crate) embedding: Embedding,
 }
 
 fn other_endpoint(graph: &Graph, edge_id: EdgeId, vertex_id: VertexId) -> VertexId {
@@ -202,7 +201,7 @@ fn other_endpoint(graph: &Graph, edge_id: EdgeId, vertex_id: VertexId) -> Vertex
 }
 
 /// forward edgeから親関係を復元し、rootからrightmost vertexまでのDFS vertex列を返す。
-fn rightmost_path(code: &DfsCode) -> Vec<DfsVertexId> {
+pub(crate) fn rightmost_path(code: &DfsCode) -> Vec<DfsVertexId> {
     let mut parent = vec![None; code.vertex_count()];
 
     for edge in code.edges() {
@@ -266,7 +265,8 @@ fn initial_candidates(graph: &Graph) -> Vec<Extension> {
     candidates
 }
 
-fn collect_extensions(
+// どのグラフに属するかも同時に扱えば subprocedureの enumerate
+pub(crate) fn collect_extensions(
     graph: &Graph,
     code: &DfsCode,
     embedding: &Embedding,
@@ -282,8 +282,7 @@ fn collect_extensions(
     let rightmost_graph = embedding.graph_vertex(rightmost_dfs);
 
     // backward extensions
-    // TODO: ordering
-    // 列挙順には依存せず、候補を集めた後でDfs5Tuple::Ordにより最小値を選択する。
+    // 列挙後Dfs5Tuple::Ordにより最小値を選択する(論文用再チェック)
     // rightmost vertexからrightmost path上の祖先へ戻るvalid childだけを列挙
     for &edge_id in graph.adjacency(rightmost_graph) {
         if embedding.used_edge(edge_id) {
