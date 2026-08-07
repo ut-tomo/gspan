@@ -89,7 +89,7 @@ impl DfsCode {
         self.edges.is_empty()
     }
 
-    fn push(&mut self, edge: Dfs5Tuple) {
+    pub(crate) fn push(&mut self, edge: Dfs5Tuple) {
         self.edges.push(edge);
     }
     /// vertex数はid+1
@@ -200,6 +200,19 @@ fn other_endpoint(graph: &Graph, edge_id: EdgeId, vertex_id: VertexId) -> Vertex
     }
 }
 
+/// vertexを発見したtree edgeをDFS vertex idで引けるようにする。backward edgeを持つidはNone。
+fn tree_edges(code: &DfsCode) -> Vec<Option<Dfs5Tuple>> {
+    let mut edges = vec![None; code.vertex_count()];
+
+    for edge in code.edges() {
+        if edge.is_forward() {
+            edges[edge.to.0] = Some(*edge);
+        }
+    }
+
+    edges
+}
+
 /// forward edgeから親関係を復元し、rootからrightmost vertexまでのDFS vertex列を返す。
 pub(crate) fn rightmost_path(code: &DfsCode) -> Vec<DfsVertexId> {
     let mut parent = vec![None; code.vertex_count()];
@@ -281,6 +294,16 @@ pub(crate) fn collect_extensions(
 
     let rightmost_graph = embedding.graph_vertex(rightmost_dfs);
 
+    // pattern中の最小vertex labelはroot edgeのfrom_label。
+    let minimum_label = code
+        .edges()
+        .first()
+        .expect("extension needs a non-empty code")
+        .from_label;
+
+    // rightmost path上のvertexから下へ伸びているtree edge。pre-pruningの比較対象。
+    let tree_edges = tree_edges(code);
+
     // backward extensions
     // 列挙後Dfs5Tuple::Ordにより最小値を選択する(論文用再チェック)
     // rightmost vertexからrightmost path上の祖先へ戻るvalid childだけを列挙
@@ -291,18 +314,30 @@ pub(crate) fn collect_extensions(
 
         let target_graph = other_endpoint(graph, edge_id, rightmost_graph);
 
-        let Some(target_dfs) = rightmost_path
+        let Some(index) = rightmost_path
             .iter()
-            .copied()
-            .find(|&dfs_vertex| embedding.graph_vertex(dfs_vertex) == target_graph)
+            .position(|&dfs_vertex| embedding.graph_vertex(dfs_vertex) == target_graph)
         else {
             continue;
         };
+
+        let target_dfs = rightmost_path[index];
 
         if target_dfs == rightmost_dfs {
             continue;
         }
         let edge = &graph.edges()[edge_id.0];
+
+        // pre-pruning(i) target_dfsから下へ伸びているtree edgeより小さいbackward edgeは、
+        // target_dfsからそのedgeを先に辿るcodeの方が小さくなるのでminimumになり得ない。
+        let tree_edge = tree_edges[rightmost_path[index + 1].0]
+            .expect("a non-root vertex on the rightmost path has a tree edge");
+
+        if (tree_edge.edge_label, tree_edge.to_label)
+            > (edge.label, graph.vertex_labels()[rightmost_graph.0])
+        {
+            continue;
+        }
 
         extensions.push(Extension {
             dfs_edge: Dfs5Tuple {
@@ -317,11 +352,10 @@ pub(crate) fn collect_extensions(
     }
 
     // forward extensions
-    // TODO: canonical になり得ないextensionのpruneの追加
     // 未発見vertexへのedgeだけを、rightmost vertexからroot方向の順に候補化する。
     let new_dfs_vertex = DfsVertexId(code.vertex_count());
 
-    for &from_dfs in rightmost_path.iter().rev() {
+    for (index, &from_dfs) in rightmost_path.iter().enumerate().rev() {
         let from_graph = embedding.graph_vertex(from_dfs);
 
         for &edge_id in graph.adjacency(from_graph) {
@@ -337,6 +371,23 @@ pub(crate) fn collect_extensions(
 
             let edge = &graph.edges()[edge_id.0];
             let to_label = graph.vertex_labels()[to_graph.0];
+
+            // pre-pruning(ii) root edgeのfrom_labelより小さいvertex labelを含むpatternは、
+            // そのvertexをrootにしたcodeの方が小さいのでminimumになり得ない。
+            if to_label < minimum_label {
+                continue;
+            }
+
+            // pre-pruning(iii) rightmost vertex以外から伸ばす場合、そこから下へ伸びている
+            // tree edgeより小さいforward edgeは、そちらを先に辿るcodeの方が小さくなる。
+            if let Some(&below) = rightmost_path.get(index + 1) {
+                let tree_edge = tree_edges[below.0]
+                    .expect("a non-root vertex on the rightmost path has a tree edge");
+
+                if (tree_edge.edge_label, tree_edge.to_label) > (edge.label, to_label) {
+                    continue;
+                }
+            }
 
             extensions.push(Extension {
                 dfs_edge: Dfs5Tuple {
@@ -418,6 +469,94 @@ pub fn minimum_dfs_code(graph: &Graph) -> Result<DfsCode, MinDfsError> {
     }
 
     Ok(code)
+}
+
+pub fn is_min_dfs_code(graph: &Graph, candidate: &DfsCode) -> Result<bool, MinDfsError> {
+    if !is_connected(graph) {
+        return Err(MinDfsError::DisconnectedGraph);
+    }
+
+    if graph.edge_count() == 0 {
+        return Ok(candidate.is_empty());
+    }
+
+    // candidateはこのgraph全体を表すDFS codeであることを前提にする
+    if candidate.edge_count() != graph.edge_count() {
+        return Ok(false);
+    }
+
+    let candidate_edges = candidate.edges();
+
+    /*
+     * 1 edge目のminimum DFS tupleを求める
+     */
+    let initial = initial_candidates(graph);
+
+    let minimum_first_edge = initial
+        .iter()
+        .map(|extension| extension.dfs_edge)
+        .min()
+        .expect("graph with edges must have an initial candidate");
+
+    // 最初のedgeですでにcandidateと違えばminimumではない
+    if minimum_first_edge != candidate_edges[0] {
+        return Ok(false);
+    }
+
+    let mut embeddings: Vec<Embedding> = initial
+        .into_iter()
+        .filter(|extension| extension.dfs_edge == minimum_first_edge)
+        .map(|extension| extension.embedding)
+        .collect();
+
+    let mut minimum_prefix = DfsCode::new();
+    minimum_prefix.push(minimum_first_edge);
+
+    /*
+     * 2 edge目以降をminimum DFS codeと同じ方法で生成する。
+     *
+     * 各stepでcandidateと比較し、違った瞬間にfalseを返す
+     */
+    for candidate_edge in &candidate_edges[1..] {
+        let path = rightmost_path(&minimum_prefix);
+
+        let extensions: Vec<Extension> = embeddings
+            .iter()
+            .flat_map(|embedding| collect_extensions(graph, &minimum_prefix, embedding, &path))
+            .collect();
+
+        let minimum_edge = extensions
+            .iter()
+            .map(|extension| extension.dfs_edge)
+            .min()
+            .expect("connected graph with unused edges must have an extension");
+
+        /*
+         * graphから生成されるminimum continuationと
+         * candidateの次edgeが違う
+         *      ↓
+         * candidate != min(candidate)
+         *      ↓
+         * これ以降を生成する必要なし
+         */
+        if minimum_edge != *candidate_edge {
+            return Ok(false);
+        }
+
+        /*
+         * 同じminimum prefixを実現するembeddingをすべて残す
+         * ここはminimum_dfs_codeと同じはず
+         */
+        embeddings = extensions
+            .into_iter()
+            .filter(|extension| extension.dfs_edge == minimum_edge)
+            .map(|extension| extension.embedding)
+            .collect();
+
+        minimum_prefix.push(minimum_edge);
+    }
+
+    Ok(true)
 }
 
 /// BFSで全vertexへ到達できるか確認する。空graphは連結として扱う。

@@ -1,7 +1,6 @@
 use crate::graph::{EdgeId, Graph, VertexId};
 use crate::graph_to_mindfs::{
-    Dfs5Tuple, DfsCode, DfsVertexId, Embedding, collect_extensions, minimum_dfs_code,
-    rightmost_path,
+    Dfs5Tuple, DfsCode, DfsVertexId, Embedding, collect_extensions, is_min_dfs_code, rightmost_path,
 };
 use std::collections::{BTreeMap, HashSet};
 
@@ -25,9 +24,8 @@ pub fn subgraph_mining(graphs: &[Graph], min_support: usize) -> Vec<FrequentPatt
         if projected_support(&occurrences) < min_support {
             continue;
         }
-        let root_graph = graph_from_dfs_edges(&[root_edge]);
-
-        let root_code = minimum_dfs_code(&root_graph).expect("a one-edge graph must be connected");
+        let mut root_code = DfsCode::new();
+        root_code.push(root_edge);
 
         mine_projected(graphs, root_code, occurrences, min_support, &mut patterns);
     }
@@ -111,23 +109,22 @@ fn mine_projected(
             continue;
         }
 
-        let mut candidate_edges = code.edges().to_vec();
-        candidate_edges.push(next_edge);
+        let mut candidate_code = code.clone();
+        candidate_code.push(next_edge);
 
         // 現在のDFS codeが表現するpatternをGraphへ戻す。
-        let candidate_graph = graph_from_dfs_edges(&candidate_edges);
-
-        let canonical_code = minimum_dfs_code(&candidate_graph)
-            .expect("a rightmost extension must remain connected");
+        let candidate_graph = graph_from_dfs_edges(candidate_code.edges());
 
         // minimum DFS codeでないbranchをcanonical pruning。
-        if canonical_code.edges() != candidate_edges {
+        if !is_min_dfs_code(&candidate_graph, &candidate_code)
+            .expect("a rightmost extension must remain connected")
+        {
             continue;
         }
 
         mine_projected(
             graphs,
-            canonical_code,
+            candidate_code,
             next_occurrences,
             min_support,
             patterns,
