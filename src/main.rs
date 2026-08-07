@@ -3,15 +3,28 @@ use std::fmt;
 use std::fs;
 use std::io::{self, Read};
 
+use gspan::gengraph::{GeneratorConfig, generate_dataset, write_transactions};
 use gspan::graph::{EdgeLabel, Graph, VertexId, VertexLabel};
 use gspan::graph_to_mindfs::DfsCode;
 use gspan::subgraph_mining::{FrequentPattern, subgraph_mining};
 
-const USAGE: &str = "usage: gspan [-m minsup] [graph-file]";
+const USAGE: &str = "usage: gspan [-m minsup] [graph-file] / gspan -g [-s seed]";
 
 fn main() -> Result<(), Box<dyn Error>> {
-    // 参照実装(gl/gspan/main.cpp)の `-m minsup` に合わせてCLIから受け取る。
+    // `-m minsup` 受け取る
     let options = parse_arguments()?;
+
+    if options.generate {
+        let config = GeneratorConfig {
+            seed: options.seed,
+            ..GeneratorConfig::default()
+        };
+
+        return Ok(write_transactions(
+            &generate_dataset(&config)?,
+            io::stdout().lock(),
+        )?);
+    }
 
     let graphs = load_graphs(options.graph_file.as_deref())?;
 
@@ -25,12 +38,16 @@ fn main() -> Result<(), Box<dyn Error>> {
 struct Options {
     min_support: usize,
     graph_file: Option<String>,
+    generate: bool,
+    seed: u64,
 }
 
 fn parse_arguments() -> Result<Options, Box<dyn Error>> {
     let mut options = Options {
         min_support: 0,
         graph_file: None,
+        generate: false,
+        seed: GeneratorConfig::default().seed,
     };
 
     let mut arguments = std::env::args().skip(1);
@@ -40,6 +57,12 @@ fn parse_arguments() -> Result<Options, Box<dyn Error>> {
             "-m" => {
                 let value = arguments.next().ok_or(USAGE)?;
                 options.min_support = value.parse()?;
+            }
+            // gengraphでdatasetを生成するmode。-s はseed
+            "-g" => options.generate = true,
+            "-s" => {
+                let value = arguments.next().ok_or(USAGE)?;
+                options.seed = value.parse()?;
             }
             // 参照実装が持つ -x maxpat / -i (instance出力) は未実装なので明示的に弾いておく
             "-x" | "-i" => return Err(format!("{argument} is not implemented; {USAGE}").into()),
